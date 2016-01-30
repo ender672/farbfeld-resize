@@ -98,13 +98,13 @@ main(int argc, char *argv[])
 				return 1;
 			}
 			for (j = 0; j < width_in * 4; j++) {
-				sl_in[j] = ntohs(io_buf[j]) >> 8;
+				sl_in[j] = ntohs(io_buf[j]) / 257;
 			}
 			xscale(sl_in, width_in, tmp, width_out, 4, 0);
 		}
 		yscaler_scale(&ys, sl_out, width_out, 4, 0, i);
 		for (j = 0; j < width_out * 4; j++) {
-			io_buf[j] = htons(sl_out[j] << 8);
+			io_buf[j] = htons(sl_out[j] * 257);
 		}
 		if (fwrite(io_buf, 1, buf_out_len, stdout) != buf_out_len) {
 			fprintf(stderr, "write error\n");
