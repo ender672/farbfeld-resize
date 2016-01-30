@@ -10,6 +10,28 @@
 #include <string.h>
 #include "resample.h"
 
+void
+fix_ratio(uint32_t sw, uint32_t sh, uint32_t *dw, uint32_t *dh)
+{
+	double x, y;
+
+	x = *dw / (double)sw;
+	y = *dh / (double)sh;
+
+	if (x && (!y || x<y)) {
+		*dh = (sh * x) + 0.5;
+	} else {
+		*dw = (sw * y) + 0.5;
+	}
+
+	if (!*dh) {
+		*dh = 1;
+	}
+	if (!*dw) {
+		*dw = 1;
+	}
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -22,7 +44,7 @@ main(int argc, char *argv[])
 	struct yscaler ys;
 
 	if (argc != 3) {
-		fprintf(stderr, "usage: %s [WIDTH] [HEIGHT]\n", argv[0]);
+		fprintf(stderr, "usage: %s [BOX WIDTH] [BOX HEIGHT]\n", argv[0]);
 		return 1;
 	}
 
@@ -47,6 +69,8 @@ main(int argc, char *argv[])
 	}
 	width_in = ntohl(*((uint32_t *)(hdr + 8)));
 	height_in = ntohl(*((uint32_t *)(hdr + 12)));
+
+	fix_ratio(width_in, height_in, &width_out, &height_out);
 
 	fputs("farbfeld", stdout);
 	tmp32 = htonl(width_out);
