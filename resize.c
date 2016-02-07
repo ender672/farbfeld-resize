@@ -36,10 +36,10 @@ int
 main(int argc, char *argv[])
 {
 	uint32_t width_in, height_in, width_out, height_out, i, j, tmp32;
-	size_t buf_in_len, buf_out_len;
+	size_t psl_len, psl_offset, buf_in_len, buf_out_len;
 	uint16_t *io_buf;
 	uint8_t hdr[strlen("farbfeld") + 2 * sizeof(uint32_t)];
-	uint8_t *tmp, *sl_in, *sl_out;
+	uint8_t *tmp, *psl_buf, *psl_pos0, *sl_out;
 	char *end;
 	struct yscaler ys;
 
@@ -84,7 +84,10 @@ main(int argc, char *argv[])
 		return 1;
 	}
 
-	sl_in = malloc(width_in * 4);
+	psl_len = padded_sl_len_offset(width_in, width_out, 4, &psl_offset);
+	psl_buf = malloc(psl_len);
+	psl_pos0 = psl_buf + psl_offset;
+	
 	sl_out = malloc(width_out * 4);
 	buf_in_len = width_in * sizeof(uint16_t) * 4;
 	buf_out_len = width_out * sizeof(uint16_t) * 4;
@@ -98,11 +101,12 @@ main(int argc, char *argv[])
 				return 1;
 			}
 			for (j = 0; j < width_in * 4; j++) {
-				sl_in[j] = ntohs(io_buf[j]) / 257;
+				psl_pos0[j] = ntohs(io_buf[j]) / 257;
 			}
-			xscale(sl_in, width_in, tmp, width_out, 4, 0);
+			padded_sl_extend_edges(psl_buf, width_in, psl_offset, 4);
+			xscale_padded(psl_pos0, width_in, tmp, width_out, 4);
 		}
-		yscaler_scale(&ys, sl_out, width_out, 4, 0, i);
+		yscaler_scale(&ys, sl_out, i);
 		for (j = 0; j < width_out * 4; j++) {
 			io_buf[j] = htons(sl_out[j] * 257);
 		}
