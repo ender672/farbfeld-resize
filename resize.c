@@ -1,119 +1,155 @@
-/*
- * Copy me if you can.
- * by FRIGN
- */
 #include <arpa/inet.h>
-
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "resample.h"
+
+#define MAX_DIMENSION 1000000
+
+struct image {
+	uint32_t width;
+	uint32_t height;
+	uint16_t *data;
+};
+
+struct header {
+	char sig[8];
+	uint32_t width;
+	uint32_t height;
+};
 
 void
-fix_ratio(uint32_t sw, uint32_t sh, uint32_t *dw, uint32_t *dh)
+xscale(uint16_t *row_in, uint16_t *out, uint32_t width_in, uint32_t width_out,
+	uint32_t taps, uint32_t xpos)
 {
-	double x, y;
+	double x, tx, coeff, sum[4];
+	uint32_t i, j, smp_i, smp_safe;
+	int32_t val;
 
-	x = *dw / (double)sw;
-	y = *dh / (double)sh;
+	sum[0] = sum[1] = sum[2] = sum[3] = 0.0;
+	smp_i = (uint64_t)xpos * width_in / width_out;
+	tx = ((uint64_t)xpos * width_in % width_out) / (double)width_out;
 
-	if (x && (!y || x<y)) {
-		*dh = (sh * x) + 0.5;
-	} else {
-		*dw = (sw * y) + 0.5;
+	for (i=1; i<=taps*2; i++) {
+		x = (i > taps ? i - taps - tx : taps - i + tx) / (taps / 2);
+		if (x < 1) {
+			coeff = (3*x*x*x - 5*x*x + 2) / taps;
+		} else {
+			coeff = (-1*x*x*x + 5*x*x - 8*x + 4) / taps;
+		}
+		smp_safe = smp_i + i < taps ? 0 : smp_i + i - taps;
+		smp_safe = smp_safe >= width_in ? width_in - 1 : smp_safe;
+		for (j=0; j<4; j++) {
+			sum[j] += row_in[smp_safe * 4 + j] / 65535.0 * coeff;
+		}
 	}
 
-	if (!*dh) {
-		*dh = 1;
+	for (i=0; i<4; i++) {
+		val = 65535 * sum[i];
+		out[i] = val < 0 ? 0 : (val > 65535 ? 65535 : val);
 	}
-	if (!*dw) {
-		*dw = 1;
+}
+
+void
+xscale_transpose(struct image in, struct image out)
+{
+	uint16_t *in_row, *out_smp;
+	uint32_t i, j, taps;
+
+	taps = out.height < in.width ? 2 * in.width / out.height : 2;
+	taps += taps & 1;
+
+	for (i=0; i<out.width; i++) {
+		in_row = in.data + i * in.width * 4;
+		for (j=0; j<out.height; j++) {
+			out_smp = out.data + (j * out.width + i) * 4;
+			xscale(in_row, out_smp, in.width, out.height, taps, j);
+		}
 	}
 }
 
 int
 main(int argc, char *argv[])
 {
-	uint32_t width_in, height_in, width_out, height_out, i, j, tmp32;
-	size_t psl_len, psl_offset, buf_in_len, buf_out_len;
-	uint16_t *io_buf;
-	uint8_t hdr[strlen("farbfeld") + 2 * sizeof(uint32_t)];
-	uint8_t *tmp, *psl_buf, *psl_pos0, *sl_out;
+	struct header hdr;
+	struct image in, tmp, out;
+	size_t i, in_len, out_len, tmp_len;
 	char *end;
-	struct yscaler ys;
 
 	if (argc != 3) {
-		fprintf(stderr, "usage: %s [BOX WIDTH] [BOX HEIGHT]\n", argv[0]);
+		fprintf(stderr, "usage: %s [width] [height]\n", argv[0]);
 		return 1;
 	}
 
-	width_out = strtoul(argv[1], &end, 10);
-	if (!end || !width_out) {
+	out.width = strtoul(argv[1], &end, 10);
+	if (!end || !out.width || out.width > MAX_DIMENSION) {
 		fprintf(stderr, "bad width given\n");
 		return 1;
 	}
-	height_out = strtoul(argv[2], &end, 10);
-	if (!end || !height_out) {
+	out.height = strtoul(argv[2], &end, 10);
+	if (!end || !out.height || out.height > MAX_DIMENSION) {
 		fprintf(stderr, "bad height given\n");
 		return 1;
 	}
 
-	if (fread(hdr, 1, sizeof(hdr), stdin) != sizeof(hdr)) {
+	if (fread(&hdr, 1, sizeof(hdr), stdin) != sizeof(hdr)) {
 		fprintf(stderr, "incomplete header\n");
 		return 1;
 	}
-	if (memcmp("farbfeld", hdr, strlen("farbfeld"))) {
+	if (memcmp("farbfeld", hdr.sig, strlen("farbfeld"))) {
 		fprintf(stderr, "invalid magic\n");
 		return 1;
 	}
-	width_in = ntohl(*((uint32_t *)(hdr + 8)));
-	height_in = ntohl(*((uint32_t *)(hdr + 12)));
+	in.width = ntohl(hdr.width);
+	in.height = ntohl(hdr.height);
 
-	fix_ratio(width_in, height_in, &width_out, &height_out);
+	/* Fix the aspect ratio. */
+	if (out.width / (double)in.width < out.height / (double)in.height) {
+		out.height = in.height * out.width / in.width;
+	} else {
+		out.width = in.width * out.height / in.height;
+	}
 
-	fputs("farbfeld", stdout);
-	tmp32 = htonl(width_out);
-	if (fwrite(&tmp32, sizeof(uint32_t), 1, stdout) != 1) {
+	hdr.width = htonl(out.width);
+	hdr.height = htonl(out.height);
+	if (fwrite(&hdr, sizeof(hdr), 1, stdout) != 1) {
 		fprintf(stderr, "unable to write header\n");
 		return 1;
 	}
-	tmp32 = htonl(height_out);
-	if (fwrite(&tmp32, sizeof(uint32_t), 1, stdout) != 1) {
-		fprintf(stderr, "unable to write header\n");
+
+	tmp.width = in.height;
+	tmp.height = out.width;
+
+	in_len = in.width * in.height * 4;
+	out_len = out.width * out.height * 4;
+	tmp_len = tmp.width * tmp.height * 4;
+
+	in.data = malloc(in_len * sizeof(uint16_t));
+	out.data = malloc(out_len * sizeof(uint16_t));
+	tmp.data = malloc(tmp_len * sizeof(uint16_t));
+
+	if (!in.data || !out.data || !tmp.data) {
+		fprintf(stderr, "unable to allocate memory.\n");
 		return 1;
 	}
 
-	psl_len = padded_sl_len_offset(width_in, width_out, 4, &psl_offset);
-	psl_buf = malloc(psl_len);
-	psl_pos0 = psl_buf + psl_offset;
-	
-	sl_out = malloc(width_out * 4);
-	buf_in_len = width_in * sizeof(uint16_t) * 4;
-	buf_out_len = width_out * sizeof(uint16_t) * 4;
-	io_buf = malloc(buf_in_len > buf_out_len ? buf_in_len : buf_out_len);
-	yscaler_init(&ys, height_in, height_out, width_out * 4);
+	if (fread(in.data, sizeof(uint16_t), in_len, stdin) != in_len) {
+		fprintf(stderr, "unexpected EOF\n");
+		return 1;
+	}
+	for (i = 0; i < in_len; i++) {
+		in.data[i] = ntohs(in.data[i]);
+	}
 
-	for (i = 0; i < height_out; i++) {
-		while ((tmp = yscaler_next(&ys))) {
-			if (fread(io_buf, 1, buf_in_len, stdin) != buf_in_len) {
-				fprintf(stderr, "unexpected EOF\n");
-				return 1;
-			}
-			for (j = 0; j < width_in * 4; j++) {
-				psl_pos0[j] = ntohs(io_buf[j]) / 257;
-			}
-			padded_sl_extend_edges(psl_buf, width_in, psl_offset, 4);
-			xscale_padded(psl_pos0, width_in, tmp, width_out, 4);
-		}
-		yscaler_scale(&ys, sl_out, i);
-		for (j = 0; j < width_out * 4; j++) {
-			io_buf[j] = htons(sl_out[j] * 257);
-		}
-		if (fwrite(io_buf, 1, buf_out_len, stdout) != buf_out_len) {
-			fprintf(stderr, "write error\n");
-			return 1;
-		}
+	xscale_transpose(in, tmp);
+	xscale_transpose(tmp, out);
+
+	for (i = 0; i < out_len; i++) {
+		out.data[i] = htons(out.data[i]);
+	}
+	if (fwrite(out.data, sizeof(uint16_t), out_len, stdout) != out_len) {
+		fprintf(stderr, "write error\n");
+		return 1;
 	}
 	return 0;
 }
