@@ -4,8 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_DIMENSION 1000000
-
 struct image {
 	uint32_t width;
 	uint32_t height;
@@ -68,12 +66,27 @@ xscale_transpose(struct image in, struct image out)
 	}
 }
 
+void*
+alloc_img(uint32_t width, uint32_t height)
+{
+	uint64_t tmp;
+	size_t size;
+
+	tmp = (uint64_t)width * height;
+	size = 4 * sizeof(uint16_t);
+
+	if (tmp > SIZE_MAX / size) {
+		return 0;
+	}
+	return malloc(tmp * size);
+}
+
 int
 main(int argc, char *argv[])
 {
 	struct header hdr;
 	struct image in, tmp, out;
-	size_t i, in_len, out_len, tmp_len;
+	size_t i, in_len, out_len;
 	char *end;
 
 	if (argc != 3) {
@@ -82,12 +95,12 @@ main(int argc, char *argv[])
 	}
 
 	out.width = strtoul(argv[1], &end, 10);
-	if (!end || !out.width || out.width > MAX_DIMENSION) {
+	if (!end || !out.width) {
 		fprintf(stderr, "bad width given\n");
 		return 1;
 	}
 	out.height = strtoul(argv[2], &end, 10);
-	if (!end || !out.height || out.height > MAX_DIMENSION) {
+	if (!end || !out.height) {
 		fprintf(stderr, "bad height given\n");
 		return 1;
 	}
@@ -102,12 +115,18 @@ main(int argc, char *argv[])
 	}
 	in.width = ntohl(hdr.width);
 	in.height = ntohl(hdr.height);
+	if (!in.width || !in.height) {
+		fprintf(stderr, "bad input image\n");
+		return 1;
+	}
 
 	/* Fix the aspect ratio. */
 	if (out.width / (double)in.width < out.height / (double)in.height) {
 		out.height = in.height * out.width / in.width;
+		out.height = out.height ? out.height : 1;
 	} else {
 		out.width = in.width * out.height / in.height;
+		out.width = out.width ? out.width : 1;
 	}
 
 	hdr.width = htonl(out.width);
@@ -122,11 +141,10 @@ main(int argc, char *argv[])
 
 	in_len = in.width * in.height * 4;
 	out_len = out.width * out.height * 4;
-	tmp_len = tmp.width * tmp.height * 4;
 
-	in.data = malloc(in_len * sizeof(uint16_t));
-	out.data = malloc(out_len * sizeof(uint16_t));
-	tmp.data = malloc(tmp_len * sizeof(uint16_t));
+	in.data = alloc_img(in.width, in.height);
+	out.data = alloc_img(out.width, out.height);
+	tmp.data = alloc_img(tmp.width, tmp.height);
 
 	if (!in.data || !out.data || !tmp.data) {
 		fprintf(stderr, "unable to allocate memory.\n");
